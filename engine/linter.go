@@ -1,0 +1,397 @@
+// Copyright 2022 Explore.dev Unipessoal Lda. All Rights Reserved.
+// Use of this source code is governed by a license that can be
+// found in the LICENSE file.
+
+package engine
+
+import (
+	"fmt"
+	"log/slog"
+	"regexp"
+)
+
+func getAllMatches(pattern string, groups []PadGroup, rules []PadRule, workflows []PadWorkflow) []string {
+	rePatternFnCall := regexp.MustCompile(pattern)
+	allGroupFunctionCalls := make([]string, 0)
+	for _, group := range groups {
+		spec := group.Spec
+		groupFunctionCalls := rePatternFnCall.FindAllString(spec, -1)
+
+		if len(groupFunctionCalls) == 0 {
+			continue
+		}
+
+		allGroupFunctionCalls = append(allGroupFunctionCalls, groupFunctionCalls...)
+	}
+
+	for _, rule := range rules {
+		spec := rule.Spec
+		groupFunctionCalls := rePatternFnCall.FindAllString(spec, -1)
+
+		if len(groupFunctionCalls) == 0 {
+			continue
+		}
+
+		allGroupFunctionCalls = append(allGroupFunctionCalls, groupFunctionCalls...)
+	}
+
+	return allGroupFunctionCalls
+}
+
+// Validations:
+// - Every rule has a (unique) name
+// - Every rule has a kind
+// - Every rules has a spec
+func lintRules(padRules []PadRule) error {
+	rulesName := make([]string, 0)
+
+	for _, rule := range padRules {
+		if rule.Name == "" {
+			return fmt.Errorf("rule %v has invalid name", rule)
+		}
+
+		for _, ruleName := range rulesName {
+			if ruleName == rule.Name {
+				return fmt.Errorf("rule with the name %v already exists", rule.Name)
+			}
+		}
+
+		if rule.Spec == "" {
+			return fmt.Errorf("rule %v has empty spec", rule.Name)
+		}
+
+		rulesName = append(rulesName, rule.Name)
+	}
+
+	return nil
+}
+
+// Validations:
+// - Group has unique name
+func lintGroups(log *slog.Logger, padGroups []PadGroup) error {
+	groupsName := make([]string, 0)
+
+	for _, group := range padGroups {
+		log.With("name", group.Name).Info("analyzing group")
+
+		if group.Name == "" {
+			return fmt.Errorf("group %v has invalid name", group)
+		}
+
+		for _, groupName := range groupsName {
+			if groupName == group.Name {
+				return fmt.Errorf("group with the name %v already exists", group.Name)
+			}
+		}
+
+		groupsName = append(groupsName, group.Name)
+	}
+
+	return nil
+}
+
+// Validations:
+// - Workflow has unique name
+// - Workflow has non empty rules
+// - Workflow has only known rules
+// - Workflow run block has a then block or actions
+func lintWorkflows(log *slog.Logger, rules []PadRule, padWorkflows []PadWorkflow) error {
+	workflowsName := make([]string, 0)
+
+	for _, workflow := range padWorkflows {
+		for _, workflowName := range workflowsName {
+			if workflowName == workflow.Name {
+				return fmt.Errorf("workflow with the name `%v` already exists", workflow.Name)
+			}
+		}
+
+		for _, rule := range workflow.Rules {
+			ruleName := rule.Rule
+			if ruleName == "" {
+				return fmt.Errorf("workflow has an empty rule")
+			}
+
+			_, exists := findRule(rules, ruleName)
+			if !exists {
+				return fmt.Errorf("rule `%v` is unknown", ruleName)
+			}
+		}
+
+		workflowsName = append(workflowsName, workflow.Name)
+
+		for _, run := range workflow.Runs {
+			if err := validateWorkflowRun(&run, &workflow); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func validateWorkflowRun(run *PadWorkflowRunBlock, workflow *PadWorkflow) error {
+	var hasForEachBlock = run.ForEach != nil
+	var hasActions = run.Actions != nil && len(run.Actions) > 0
+	var hasThenActions = run.Then != nil && len(run.Then) > 0
+
+	if !hasThenActions && !hasActions && !hasForEachBlock {
+		return fmt.Errorf("workflow `%v` has a run block without a 'then' block, no actions, no extra actions or a for each block", workflow.Name)
+	}
+
+	for _, thenRun := range run.Then {
+		err := validateWorkflowRun(&thenRun, workflow)
+		if err != nil {
+			return err
+		}
+	}
+
+	for _, elseRun := range run.Else {
+		err := validateWorkflowRun(&elseRun, workflow)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// Validations
+// - Check that all rules are being used
+// - Check that all referenced rules exist
+func lintRulesMentions(log *slog.Logger, rules []PadRule, groups []PadGroup, workflows []PadWorkflow) error {
+	totalUsesByRule := make(map[string]int, len(rules))
+
+	for _, rule := range rules {
+		totalUsesByRule[rule.Name] = 0
+	}
+
+	for _, workflow := range workflows {
+		for _, rule := range workflow.Rules {
+			ruleName := rule.Rule
+			_, exists := findRule(rules, ruleName)
+
+			if exists {
+				totalUsesByRule[ruleName]++
+			}
+		}
+
+		for _, run := range workflow.Runs {
+			err := lintRulesMentionsInRun(run, rules, totalUsesByRule)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	for _, ruleName := range getCallsToRuleBuiltIn(groups, rules, workflows) {
+		_, ok := findRule(rules, ruleName)
+		if !ok {
+			return fmt.Errorf("the rule `%v` isn't defined", ruleName)
+		}
+		totalUsesByRule[ruleName]++
+	}
+
+	for ruleName, totalUses := range totalUsesByRule {
+		if totalUses == 0 {
+			log.With("name", ruleName).Warn("unused rule")
+		}
+	}
+
+	return nil
+}
+
+func getCallsToRuleBuiltIn(groups []PadGroup, rules []PadRule, workflows []PadWorkflow) []string {
+	allRuleFunctionCalls := make([]string, 0)
+
+	gotFunctionCalls := getAllMatches(`\$rule\("[^)]*"\)`, groups, rules, workflows)
+
+	reRuleMention := regexp.MustCompile(`"(.*?)"`)
+	for _, ruleWithRuleCall := range gotFunctionCalls {
+		for _, ruleCall := range reRuleMention.FindAllString(ruleWithRuleCall, -1) {
+			ruleName := ruleCall[1 : len(ruleCall)-1]
+
+			allRuleFunctionCalls = append(allRuleFunctionCalls, ruleName)
+		}
+	}
+
+	return allRuleFunctionCalls
+}
+
+// Validations
+// - Check that all groups are being used
+// - Check that all referenced groups exist
+func lintGroupsMentions(groups []PadGroup, rules []PadRule, workflows []PadWorkflow) error {
+	allGroupFunctionCalls := getAllMatches(`\$group\(".*"\)`, groups, rules, workflows)
+
+	reGroupMention := regexp.MustCompile(`"(.*?)"`)
+	for _, groupFunctionCall := range allGroupFunctionCalls {
+		groupMention := reGroupMention.FindString(groupFunctionCall)
+		// Remove quotation marks
+		groupMention = groupMention[1 : len(groupMention)-1]
+
+		_, ok := findGroup(groups, groupMention)
+		if !ok {
+			return fmt.Errorf("the group `%v` isn't defined", groupMention)
+		}
+	}
+
+	return nil
+}
+
+func lintShadowedVariablesInRuns(runs []PadWorkflowRunBlock, definedVariables map[string]bool) error {
+	for _, run := range runs {
+		if run.ForEach != nil {
+			// since the key may not be present in some for each blocks
+			// we wanna disregard empty keys so that we don't get a lint error
+			if run.ForEach.Key != "" {
+				if _, ok := definedVariables[run.ForEach.Key]; ok {
+					return fmt.Errorf("variable shadowing is not allowed: the variable %s is already defined", run.ForEach.Key)
+				}
+			}
+
+			if _, ok := definedVariables[run.ForEach.Value]; ok {
+				return fmt.Errorf("variable shadowing is not allowed: the variable %s is already defined", run.ForEach.Value)
+			}
+
+			definedVariables[run.ForEach.Value] = true
+			definedVariables[run.ForEach.Key] = true
+
+			err := lintShadowedVariablesInRuns(run.ForEach.Do, definedVariables)
+			if err != nil {
+				return err
+			}
+		}
+
+		err := lintShadowedVariablesInRuns(run.Then, definedVariables)
+		if err != nil {
+			return err
+		}
+
+		err = lintShadowedVariablesInRuns(run.Else, definedVariables)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func lintShadowedBuiltInsInRuns(runs []PadWorkflowRunBlock, definedBuiltIns map[string]bool) error {
+	for _, run := range runs {
+		if run.ForEach != nil {
+			if _, ok := definedBuiltIns[run.ForEach.Key]; ok {
+				return fmt.Errorf("built-in shadowing is not allowed: the variable %s is a reserved name", run.ForEach.Key)
+			}
+
+			if _, ok := definedBuiltIns[run.ForEach.Value]; ok {
+				return fmt.Errorf("built-in shadowing is not allowed: the variable %s is a reserved name", run.ForEach.Value)
+			}
+
+			err := lintShadowedBuiltInsInRuns(run.ForEach.Do, definedBuiltIns)
+			if err != nil {
+				return err
+			}
+		}
+
+		err := lintShadowedBuiltInsInRuns(run.Then, definedBuiltIns)
+		if err != nil {
+			return err
+		}
+
+		err = lintShadowedBuiltInsInRuns(run.Else, definedBuiltIns)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func lintShadowedVariables(workflows []PadWorkflow) error {
+	for _, workflow := range workflows {
+		definedVariables := map[string]bool{}
+		err := lintShadowedVariablesInRuns(workflow.Runs, definedVariables)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func lintReservedWords(workflows []PadWorkflow, reservedWords []string) error {
+	definedVariables := map[string]bool{}
+	for _, reservedWord := range reservedWords {
+		definedVariables[fmt.Sprintf("$%s", reservedWord)] = true
+	}
+
+	for _, workflow := range workflows {
+		err := lintShadowedBuiltInsInRuns(workflow.Runs, definedVariables)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func lintRulesMentionsInRun(run PadWorkflowRunBlock, rules []PadRule, totalUsesByRule map[string]int) error {
+	for _, rule := range run.If {
+		ruleName := rule.Rule
+		_, exists := findRule(rules, ruleName)
+
+		if exists {
+			totalUsesByRule[ruleName]++
+		}
+	}
+
+	for _, thenRun := range run.Then {
+		err := lintRulesMentionsInRun(thenRun, rules, totalUsesByRule)
+		if err != nil {
+			return err
+		}
+	}
+
+	for _, elseRun := range run.Else {
+		err := lintRulesMentionsInRun(elseRun, rules, totalUsesByRule)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func Lint(file *ReviewpadFile, reserved []string, logger *slog.Logger) error {
+	err := lintGroups(logger, file.Groups)
+	if err != nil {
+		return err
+	}
+
+	err = lintRules(file.Rules)
+	if err != nil {
+		return err
+	}
+
+	err = lintWorkflows(logger, file.Rules, file.Workflows)
+	if err != nil {
+		return err
+	}
+
+	err = lintRulesMentions(logger, file.Rules, file.Groups, file.Workflows)
+	if err != nil {
+		return err
+	}
+
+	err = lintReservedWords(file.Workflows, reserved)
+	if err != nil {
+		return err
+	}
+
+	err = lintShadowedVariables(file.Workflows)
+	if err != nil {
+		return err
+	}
+
+	return lintGroupsMentions(file.Groups, file.Rules, file.Workflows)
+}
