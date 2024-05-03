@@ -9,13 +9,12 @@ import (
 	"context"
 	"log/slog"
 
-	gh "github.com/reviewpal/reviewpal/codehost/github"
 	"github.com/reviewpal/reviewpal/codehost/target"
 	"github.com/reviewpal/reviewpal/engine"
 )
 
-func Load(ctx context.Context, log *slog.Logger, githubClient *gh.GithubClient, buf *bytes.Buffer) (*engine.ReviewpadFile, error) {
-	file, err := engine.Load(ctx, log, githubClient, buf.Bytes())
+func Load(ctx context.Context, log *slog.Logger, scmClient target.Target, buf *bytes.Buffer) (*engine.ReviewpadFile, error) {
+	file, err := engine.Load(ctx, log, scmClient, buf.Bytes())
 	if err != nil {
 		return nil, err
 	}

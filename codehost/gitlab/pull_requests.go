@@ -63,3 +63,11 @@ func (c *GitlabClient) GetPullRequestFiles(ctx context.Context) ([]target.Commit
 
 	return converters.CommitFilesFromGitlabMergeRequestDiffs(fs.([]*gitlab.MergeRequestDiff)), nil
 }
+
+func (c *GitlabClient) Comment(ctx context.Context, comment string) error {
+	_, _, err := c.client.Notes.CreateMergeRequestNote(c.ProjectID(), c.tgt.Number, &gitlab.CreateMergeRequestNoteOptions{
+		Body: gitlab.Ptr(comment),
+	})
+
+	return err
+}

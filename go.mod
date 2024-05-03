@@ -8,7 +8,6 @@ require (
 	github.com/mitchellh/mapstructure v1.5.0
 	github.com/samber/lo v1.39.0
 	github.com/stretchr/testify v1.8.4
-	github.com/tomnomnom/linkheader v0.0.0-20180905144013-02ca5825eb80
 	github.com/xanzy/go-gitlab v0.103.0
 	golang.org/x/oauth2 v0.13.0
 	gopkg.in/yaml.v3 v3.0.1

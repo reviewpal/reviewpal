@@ -61,3 +61,11 @@ func (c *GithubClient) GetPullRequestFiles(ctx context.Context) ([]target.Commit
 
 	return converters.CommitFilesFromGithubCommitFiles(fs.([]*github.CommitFile)), nil
 }
+
+func (c *GithubClient) Comment(ctx context.Context, comment string) error {
+	_, _, err := c.client.Issues.CreateComment(ctx, c.tgt.Owner, c.tgt.Repo, c.tgt.Number, &github.IssueComment{
+		Body: github.String(comment),
+	})
+
+	return err
+}

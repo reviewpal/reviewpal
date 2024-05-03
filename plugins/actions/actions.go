@@ -16,6 +16,7 @@ func New(ctx context.Context, scmClient target.Target, targetEntity *target.Enti
 
 	return map[string]any{
 		"$addLabels": acts.AddLabels,
+		"$comment":   acts.Comment,
 	}
 }
 
