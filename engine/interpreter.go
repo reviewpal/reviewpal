@@ -11,11 +11,22 @@ import (
 	"reflect"
 
 	"github.com/expr-lang/expr"
+	"github.com/expr-lang/expr/ast"
 	"github.com/reviewpal/reviewpal/codehost/target"
 	"github.com/reviewpal/reviewpal/plugins/actions"
 	"github.com/reviewpal/reviewpal/plugins/functions"
 	"github.com/samber/lo"
 )
+
+type patcher struct{}
+
+func (patcher) Visit(node *ast.Node) {
+	if callNode, ok := (*node).(*ast.CallNode); ok {
+		if idenNode, ok := (callNode.Callee).(*ast.IdentifierNode); ok {
+			fmt.Println(idenNode)
+		}
+	}
+}
 
 type Interpreter struct {
 	ctx         context.Context
@@ -70,7 +81,7 @@ func (i *Interpreter) EvalExpr(ex string) (bool, error) {
 }
 
 func (i *Interpreter) ExecStatement(statement string) error {
-	program, err := expr.Compile(statement)
+	program, err := expr.Compile(statement, expr.Patch(patcher{}))
 	if err != nil {
 		return err
 	}
@@ -104,8 +115,8 @@ func NewInterpreter(
 		return nil, err
 	}
 
-	funcs := functions.New(ctx, scmClient, targetEntity, pr)
-	actions := actions.New(ctx, scmClient, targetEntity, pr)
+	funcs := functions.New(ctx, scmClient, targetEntity, pr, logger)
+	actions := actions.New(ctx, scmClient, targetEntity, pr, logger)
 
 	return &Interpreter{
 		ctx:         ctx,

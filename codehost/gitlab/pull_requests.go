@@ -64,10 +64,36 @@ func (c *GitlabClient) GetPullRequestFiles(ctx context.Context) ([]target.Commit
 	return converters.CommitFilesFromGitlabMergeRequestDiffs(fs.([]*gitlab.MergeRequestDiff)), nil
 }
 
-func (c *GitlabClient) Comment(ctx context.Context, comment string) error {
-	_, _, err := c.client.Notes.CreateMergeRequestNote(c.ProjectID(), c.tgt.Number, &gitlab.CreateMergeRequestNoteOptions{
+func (c *GitlabClient) Comment(ctx context.Context, comment string) (*target.Comment, error) {
+	note, _, err := c.client.Notes.CreateMergeRequestNote(c.ProjectID(), c.tgt.Number, &gitlab.CreateMergeRequestNoteOptions{
 		Body: gitlab.Ptr(comment),
 	})
+	if err != nil {
+		return nil, err
+	}
 
-	return err
+	return converters.CommentFromGitlabNote(note), err
+}
+
+func (c *GitlabClient) Review(ctx context.Context, event target.ReviewState, body string) (*target.Review, error) {
+	if event == target.Approved {
+		approval, _, err := c.client.MergeRequestApprovals.ApproveMergeRequest(c.ProjectID(), c.tgt.Number, nil)
+		if err != nil {
+			return nil, err
+		}
+		return converters.ReviewFromGitlabApproval(approval), nil
+	}
+
+	if event == target.ChangesRequested {
+		_, err := c.client.MergeRequestApprovals.UnapproveMergeRequest(c.ProjectID(), c.tgt.Number)
+		if err != nil {
+			return nil, err
+		}
+
+		return &target.Review{
+			State: target.ChangesRequested,
+		}, nil
+	}
+
+	return nil, nil
 }

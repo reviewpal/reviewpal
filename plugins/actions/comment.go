@@ -4,6 +4,8 @@
 
 package actions
 
-func (a *builtinActions) Comment(comment string) error {
+import "github.com/reviewpal/reviewpal/codehost/target"
+
+func (a *builtinActions) Comment(comment string) (*target.Comment, error) {
 	return a.scmClient.Comment(a.ctx, comment)
 }

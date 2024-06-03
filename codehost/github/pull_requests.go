@@ -62,10 +62,25 @@ func (c *GithubClient) GetPullRequestFiles(ctx context.Context) ([]target.Commit
 	return converters.CommitFilesFromGithubCommitFiles(fs.([]*github.CommitFile)), nil
 }
 
-func (c *GithubClient) Comment(ctx context.Context, comment string) error {
-	_, _, err := c.client.Issues.CreateComment(ctx, c.tgt.Owner, c.tgt.Repo, c.tgt.Number, &github.IssueComment{
+func (c *GithubClient) Comment(ctx context.Context, comment string) (*target.Comment, error) {
+	cmt, _, err := c.client.Issues.CreateComment(ctx, c.tgt.Owner, c.tgt.Repo, c.tgt.Number, &github.IssueComment{
 		Body: github.String(comment),
 	})
+	if err != nil {
+		return nil, err
+	}
 
-	return err
+	return converters.CommentFromGithubComment(cmt), nil
+}
+
+func (c *GithubClient) Review(ctx context.Context, reviewEvent target.ReviewState, reviewBody string) (*target.Review, error) {
+	rvw, _, err := c.client.PullRequests.CreateReview(ctx, c.tgt.Owner, c.tgt.Repo, c.tgt.Number, &github.PullRequestReviewRequest{
+		Body:  github.String(reviewBody),
+		Event: github.String(reviewEvent.String()),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return converters.ReviewFromGithubReview(rvw), nil
 }

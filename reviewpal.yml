@@ -1,0 +1,4 @@
+workflows:
+  - name: test
+    run:
+      - $review("COMMENT", "please change")

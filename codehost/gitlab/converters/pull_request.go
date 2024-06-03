@@ -7,8 +7,10 @@ import (
 
 func PullRequestFromGitlabPullRequest(pr *gitlab.MergeRequest) *target.PullRequest {
 	return &target.PullRequest{
-		ID:     int64(pr.ID),
-		Number: pr.IID,
+		ID:      int64(pr.ID),
+		Number:  pr.IID,
+		IsDraft: pr.Draft,
+		Status:  target.PullRequestStatus(pr.State),
 		Base: BranchFromGitlabBranch(&gitlab.Branch{
 			Name: pr.TargetBranch,
 			Commit: &gitlab.Commit{
